@@ -1,0 +1,75 @@
+---
+- name: Mise à jour intelligente de tous les serveurs
+  hosts: all
+  become: yes
+  gather_facts: yes
+
+  vars:
+    reboot_required_file: /var/run/reboot-required
+
+  tasks:
+    - block:
+        - name: Mettre à jour le cache et réaliser une upgrade sur les systèmes Debian/Ubuntu
+          apt:
+            update_cache: yes
+            upgrade: dist
+            cache_valid_time: 3600
+          when: ansible_os_family == "Debian"
+          register: apt_upgrade_result
+          notify:
+            - Log upgrade result
+
+        - name: Mettre à jour tous les paquets sur les systèmes RedHat/CentOS
+          yum:
+            name: "*"
+            state: latest
+            update_cache: yes
+          when: ansible_os_family == "RedHat"
+          register: yum_upgrade_result
+          notify:
+            - Log upgrade result
+
+        - name: Vérifier si un redémarrage est requis (Debian/Ubuntu)
+          stat:
+            path: "{{ reboot_required_file }}"
+          when: ansible_os_family == "Debian"
+          register: reboot_file_stat
+
+        - name: Notifier que le serveur nécessite un redémarrage
+          debug:
+            msg: "Un redémarrage est requis sur {{ inventory_hostname }}."
+          when: ansible_os_family == "Debian" and reboot_file_stat.stat.exists
+          notify:
+            - Send reboot notification
+
+      rescue:
+        - name: Alerter en cas d'erreur pendant la mise à jour
+          debug:
+            msg: "Erreur lors de la mise à jour sur {{ inventory_hostname }}. Vérifiez les logs."
+          # Optionnel : Vous pouvez utiliser le module 'mail' pour envoyer une alerte par email.
+
+    - name: Reboot des serveurs (optionnel)
+      reboot:
+        reboot_timeout: 600
+      when: (ansible_os_family == "Debian" and reboot_file_stat.stat.exists) or
+            (ansible_os_family == "RedHat" and yum_upgrade_result is defined and yum_upgrade_result.changed)
+      notify:
+        - Log reboot action
+
+  handlers:
+    - name: Log upgrade result
+      debug:
+        msg: "Mise à jour réussie sur {{ inventory_hostname }} à {{ ansible_date_time.iso8601 }}."
+
+    - name: Send reboot notification
+      mail:
+        host: "smtp.example.com"
+        port: 25
+        to: "admin@example.com"
+        subject: "Redémarrage requis sur {{ inventory_hostname }}"
+        body: "Le serveur {{ inventory_hostname }} nécessite un redémarrage suite à la mise à jour des paquets."
+      when: inventory_hostname is defined
+
+    - name: Log reboot action
+      debug:
+        msg: "Redémarrage lancé sur {{ inventory_hostname }}."
